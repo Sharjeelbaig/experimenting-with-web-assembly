@@ -1,45 +1,31 @@
-const fs = require("node:fs");
-const path = require("node:path");
-const { WASI } = require("node:wasi");
-
-const wasmPath = path.join(__dirname, "calculator.wasm");
-const wasmBuffer = fs.readFileSync(wasmPath);
+const createCalculator = require("./calculator.js");
 
 (async () => {
-  const wasi = new WASI({
-    version: "preview1",
-    args: process.argv,
-    env: process.env,
-    preopens: {
-      "/": process.cwd()
-    }
-  });
+  const calc = await createCalculator();
 
-  const module = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(module, {
-    wasi_snapshot_preview1: wasi.wasiImport
-  });
+  // Wrap exports cleanly
+  const add      = calc.cwrap("add",      "number", ["number", "number"]);
+  const subtract = calc.cwrap("subtract", "number", ["number", "number"]);
+  const multiply = calc.cwrap("multiply", "number", ["number", "number"]);
+  const divide   = calc.cwrap("divide",   "number", ["number", "number"]);
+  const power    = calc.cwrap("power",    "number", ["number", "number"]);
+  const compute  = calc.cwrap("compute",  "number", ["number", "number", "number"]);
 
-  const exports = instance.exports;
-
-  // If built as a WASI command module, run _start.
-  if (typeof exports._start === "function") {
-    wasi.start(instance);
-    return;
+  // eval_str needs special handling — C strings aren't JS strings
+  function evalStr(expr) {
+    return calc.ccall(
+      "eval_str",          // C function name
+      "number",            // return type
+      ["string"],          // arg types
+      [expr]               // args — Emscripten handles UTF8 encoding for you
+    );
   }
 
-  // If built as a reactor/library module, initialize and call exports.
-  if (typeof exports._initialize === "function") {
-    wasi.initialize(instance);
-  }
-
-  if (typeof exports.add === "function") {
-    console.log(exports.add(2, 3));
-  }
-  if (typeof exports.compute === "function") {
-    console.log(exports.compute(10, 5, "+".charCodeAt(0)));
-  }
-})().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+  // Use them
+  console.log(add(2, 3));           // 5
+  console.log(divide(10, 0));       // NaN
+  console.log(power(2, 8));         // 256
+  console.log(compute(10, 5, 43));  // 43 = '+'.charCodeAt(0) → 15
+  console.log(evalStr("12 * 4"));   // 48
+  console.log(evalStr("2 ^ 10"));   // 1024
+})();
